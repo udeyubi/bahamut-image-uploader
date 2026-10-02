@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.5
+// @version      1.0.6
 // @author       udeyubi
 // @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張圖片與上傳紀錄，純網址保留原本貼上行為。
 // @match        https://forum.gamer.com.tw/*
@@ -626,10 +626,7 @@
   }
 
   function handleKeydown(event) {
-    if (event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey && event.code === 'KeyU') {
-      event.preventDefault();
-      openHistory();
-    } else if (event.key === 'Escape') {
+    if (event.key === 'Escape') {
       if (document.querySelector('.bimg-lightbox')) closeLightbox();
       else document.querySelector('.bimg-modal-backdrop')?.remove();
     }
