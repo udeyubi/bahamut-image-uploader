@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.3
+// @version      1.0.4
 // @author       udeyubi
 // @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張、網路圖片與上傳紀錄。
 // @match        https://forum.gamer.com.tw/*
@@ -260,27 +260,32 @@
   }
 
   function insertImage(target, url) {
-    const rte = target?.kind === 'rte' ? getRte() : null;
-    if (rte) {
-      if (rte.isPlainText) {
-        insertText(rte.source, `[img=${url}]\n`);
-      } else {
-        rte.win.focus();
-        const selection = rte.win.getSelection();
-        if (!selection.rangeCount) {
-          const range = rte.doc.createRange();
-          range.selectNodeContents(rte.doc.body);
-          range.collapse(false);
-          selection.addRange(range);
+    try {
+      const rte = target?.kind === 'rte' ? getRte() : null;
+      if (rte) {
+        if (rte.isPlainText) {
+          insertText(rte.source, `[img=${url}]\n`);
+        } else {
+          rte.win.focus();
+          const selection = rte.win.getSelection();
+          if (!selection.rangeCount) {
+            const range = rte.doc.createRange();
+            range.selectNodeContents(rte.doc.body);
+            range.collapse(false);
+            selection.addRange(range);
+          }
+          if (!rte.doc.execCommand('insertHTML', false, `<img src="${escapeHtml(url)}"><br>`)) return false;
         }
-        rte.doc.execCommand('insertHTML', false, `<img src="${escapeHtml(url)}"><br>`);
+        // 圖片已插入；縮圖更新失敗不應讓使用者誤以為插入失敗。
+        try { pageWindow.Forum?.Editor?.detectThumbnail?.(); } catch {}
+        return true;
       }
-      pageWindow.Forum?.Editor?.detectThumbnail?.();
-      return true;
-    }
-    if (target?.kind === 'textarea' && target.el.isConnected) {
-      insertText(target.el, target.el.closest('.reply-input') ? `${url} ` : `${url}\n`);
-      return true;
+      if (target?.kind === 'textarea' && target.el.isConnected && !target.el.readOnly && !target.el.disabled) {
+        insertText(target.el, target.el.closest('.reply-input') ? `${url} ` : `${url}\n`);
+        return true;
+      }
+    } catch {
+      // 編輯框可能在上傳期間被關閉或重建，交給呼叫端保留網址。
     }
     return false;
   }
@@ -292,7 +297,7 @@
   let batch = null;
 
   function enqueue(sources, target, via) {
-    if (!batch) batch = { total: 0, done: 0, failed: 0, errors: [], copied: [] };
+    if (!batch) batch = { total: 0, done: 0, failed: 0, errors: [], copied: [], historyFailed: 0 };
     sources.forEach((source) => queue.push({ ...source, target, via }));
     batch.total += sources.length;
     showProgress();
@@ -325,18 +330,26 @@
           await sleep(RETRY_DELAY);
           url = await uploadToBaha(blob, bsn);
         }
-        if (!insertImage(job.target, url)) batch.copied.push(url);
-        history.add({
-          url,
-          time: Date.now(),
-          size: blob.size,
-          width,
-          height,
-          bsn,
-          page: location.href,
-          via: job.via,
-          from: job.url && !/^data:/i.test(job.url) ? job.url : '',
-        });
+        // 網址取得後先保存，插入失敗不影響上傳結果。
+        let saved = true;
+        try {
+          history.add({
+            url,
+            time: Date.now(),
+            size: blob.size,
+            width,
+            height,
+            bsn,
+            page: location.href,
+            via: job.via,
+            from: job.url && !/^data:/i.test(job.url) ? job.url : '',
+          });
+        } catch {
+          saved = false;
+          batch.historyFailed++;
+        }
+        const inserted = insertImage(job.target, url);
+        if (!inserted || !saved) batch.copied.push(url);
         batch.done++;
       } catch (error) {
         batch.failed++;
@@ -373,14 +386,22 @@
   }
 
   function finishBatch() {
-    const { done, failed, errors, copied } = batch;
+    const { done, failed, errors, copied, historyFailed } = batch;
     batch = null;
-    if (copied.length) GM_setClipboard(copied.join('\n'));
+    let clipboardFailed = false;
+    if (copied.length) {
+      try { GM_setClipboard(copied.join('\n')); } catch { clipboardFailed = true; }
+    }
     const parts = [];
-    if (done) parts.push(`已上傳 ${done} 張`);
-    if (copied.length) parts.push('找不到編輯框，網址已複製');
+    if (done) parts.push(`已處理 ${done} 張`);
+    if (historyFailed) parts.push(`${historyFailed} 張上傳成功但無法儲存紀錄`);
+    if (copied.length) parts.push(clipboardFailed ? '無法插入或儲存的圖片網址請從下方手動複製' : '無法插入或儲存的圖片網址已複製');
     if (failed) parts.push(`失敗 ${failed} 張：${escapeHtml([...new Set(errors)].join('、'))}`);
-    showToast(`${parts.join('，')} <button type="button" data-bimg-history>上傳紀錄</button>`, { error: failed > 0, duration: failed ? 10000 : 5000 });
+    const fallback = clipboardFailed ? `<textarea readonly aria-label="待保留的圖片網址">${escapeHtml(copied.join('\n'))}</textarea>` : '';
+    showToast(`${parts.join('，')} ${fallback}<button type="button" data-bimg-history>上傳紀錄</button>`, {
+      error: failed > 0 || historyFailed > 0 || clipboardFailed,
+      duration: clipboardFailed ? 0 : failed || historyFailed ? 10000 : 5000,
+    });
   }
 
   // ---------- 畫面：拖曳遮罩 ----------
