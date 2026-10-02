@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.1
+// @version      1.0.2
 // @author       udeyubi
 // @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張、網路圖片與上傳紀錄。
 // @match        https://forum.gamer.com.tw/*
@@ -32,6 +32,9 @@
   const HISTORY_KEY = 'upload_history_v1';
   const HISTORY_LIMIT = 1000;
   const HISTORY_PAGE_SIZE = 60;
+  const COPIED_RESET_DELAY = 2000; // 「已複製」顯示多久後改回「複製網址」
+  // 方框右上角帶箭頭的「在新分頁開啟」圖示
+  const OPEN_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>';
   const IMAGE_EXT = /\.(?:png|jpe?g|gif|webp|bmp|avif)$/i;
   const IMAGE_HOSTS = /(?:^|\.)(?:fbcdn\.net|cdninstagram\.com|twimg\.com|i\.imgur\.com|pximg\.net|truth\.bahamut\.com\.tw)$/i;
 
@@ -455,12 +458,23 @@
       list.slice(shown, shown + HISTORY_PAGE_SIZE).forEach((item) => {
         const card = document.createElement('div');
         card.className = 'bimg-card';
+        const thumb = document.createElement('div');
+        thumb.className = 'bimg-card__thumb';
         const img = document.createElement('img');
         img.loading = 'lazy';
         img.src = item.url;
         img.alt = '';
         img.title = '點擊放大預覽';
         img.addEventListener('click', () => openLightbox(item.url));
+        const openLink = document.createElement('a');
+        openLink.className = 'bimg-card__open';
+        openLink.href = item.url;
+        openLink.target = '_blank';
+        openLink.rel = 'noopener';
+        openLink.title = '在新分頁開啟';
+        openLink.setAttribute('aria-label', '在新分頁開啟');
+        openLink.innerHTML = OPEN_ICON;
+        thumb.append(img, openLink);
         const meta = document.createElement('div');
         meta.className = 'bimg-card__meta';
         const dims = item.width ? `${item.width}×${item.height}・` : '';
@@ -468,10 +482,12 @@
         if (item.from) meta.title = `來源：${item.from}`;
         const actions = document.createElement('div');
         actions.className = 'bimg-card__actions';
-        [['insert', '插入'], ['copy', '複製網址'], ['open', '開啟'], ['delete', '刪除']].forEach(([action, label]) => {
+        let copiedTimer = null;
+        [['insert', '插入'], ['copy', '複製網址'], ['delete', '刪除']].forEach(([action, label]) => {
           const button = document.createElement('button');
           button.type = 'button';
           button.textContent = label;
+          if (action === 'delete') button.className = 'bimg-btn--danger';
           button.addEventListener('click', () => {
             if (action === 'insert') {
               const target = resolveTarget();
@@ -482,20 +498,26 @@
               }
             } else if (action === 'copy') {
               GM_setClipboard(item.url);
-              showToast('網址已複製', { duration: 2000 });
-            } else if (action === 'open') {
-              window.open(item.url, '_blank', 'noopener');
+              button.textContent = '✓ 已複製';
+              button.classList.add('bimg-btn--done');
+              clearTimeout(copiedTimer);
+              copiedTimer = setTimeout(() => {
+                button.textContent = label;
+                button.classList.remove('bimg-btn--done');
+              }, COPIED_RESET_DELAY);
             } else {
+              if (!confirm('確定要從上傳紀錄中刪除這張圖片嗎？\n\n只會從紀錄中移除，不會刪除巴哈圖床上的圖片本身，已經發表的文章與留言也不受影響。')) return;
               history.remove(item.url);
               list = list.filter((entry) => entry.url !== item.url);
               shown--;
               card.remove();
               renderCount();
+              if (!list.length) renderMore();
             }
           });
           actions.appendChild(button);
         });
-        card.append(img, meta, actions);
+        card.append(thumb, meta, actions);
         grid.appendChild(card);
       });
       shown = Math.min(shown + HISTORY_PAGE_SIZE, list.length);
@@ -587,7 +609,13 @@
       .bimg-modal__body { overflow-y: auto; padding: 16px 18px; }
       .bimg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
       .bimg-card { display: grid; gap: 6px; min-width: 0; padding: 8px; border: 1px solid #ddd; border-radius: 8px; }
-      .bimg-card img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; border-radius: 4px; background: #f2f2f2; cursor: zoom-in; }
+      .bimg-card__thumb { position: relative; }
+      .bimg-card img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: contain; border-radius: 4px; background: #f2f2f2; cursor: zoom-in; }
+      .bimg-card__open { position: absolute; top: 6px; right: 6px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: rgba(0,0,0,.55); color: #fff !important; opacity: .85; transition: opacity .15s, background .15s; }
+      .bimg-card__open:hover { background: rgba(0,0,0,.8); opacity: 1; }
+      .bimg-modal .bimg-btn--danger { border-color: #d94848; color: #c52f2f; }
+      .bimg-modal .bimg-btn--danger:hover { background: #d94848; color: #fff; }
+      .bimg-modal .bimg-btn--done { border-color: #2e9e5b; background: #2e9e5b; color: #fff; }
       .bimg-lightbox { position: fixed; inset: 0; z-index: 2147483003; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.86); cursor: zoom-out; }
       .bimg-lightbox img { max-width: 100%; max-height: calc(100vh - 48px); object-fit: contain; border-radius: 4px; box-shadow: 0 12px 40px rgba(0,0,0,.5); cursor: default; }
       .bimg-card__meta { overflow: hidden; color: #777; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -602,6 +630,7 @@
         .bimg-modal__header, .bimg-card { border-color: #444; }
         .bimg-modal button { border-color: #666; }
         .bimg-card img { background: #1a1a1a; }
+        .bimg-modal .bimg-btn--danger { border-color: #d65a5a; color: #ff9a9a; }
       }
     `;
     document.head.appendChild(style);
