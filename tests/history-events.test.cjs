@@ -5,8 +5,9 @@ const { test } = require('node:test');
 
 // Minimal DOM/GM harness: exercises script handlers without network or real storage.
 // isTrusted values model browser events; this is not a browser isolation test.
-function setup() {
+function setup({ captureUploads = false } = {}) {
   const nodes = [];
+  const uploads = [], revoked = [], windowEvents = {}, documentEvents = {};
   const effects = { reads: 0, writes: 0, copies: 0, confirms: 0, downloads: 0 };
   function element(tag) {
     const queries = new Map();
@@ -20,7 +21,7 @@ function setup() {
         return queries.get(selector);
       },
       addEventListener(type, callback) { this.handlers[type] = callback; },
-      setAttribute() {}, remove() {}, click() { effects.downloads++; },
+      setAttribute() {}, remove() {}, focus() {}, click() { effects.downloads++; },
     };
     nodes.push(el);
     return el;
@@ -31,12 +32,13 @@ function setup() {
   const menu = element('menu');
   menu.querySelector = () => null;
   const context = {
-    window: { addEventListener() {} },
+    window: { addEventListener(type, fn) { windowEvents[type] = fn; } },
+    HTMLTextAreaElement: class { closest() { return null; } },
     document: {
       body: element('body'), head: element('head'), createElement: element,
       getElementById() { return null; }, querySelector() { return null; },
       querySelectorAll(selector) { return selector.includes('dropList') ? [menu] : []; },
-      addEventListener() {},
+      addEventListener(type, fn) { documentEvents[type] = fn; },
     },
     GM_getValue() { effects.reads++; return entries; },
     GM_setValue(key, value) { effects.writes++; entries = value; },
@@ -44,13 +46,15 @@ function setup() {
     confirm() { effects.confirms++; return true; },
     MutationObserver: class { observe() {} },
     setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {},
-    URL: { createObjectURL() { return 'blob:test'; }, revokeObjectURL() {} }, Blob,
+    URL: { createObjectURL() { return `blob:test-${nodes.length}`; }, revokeObjectURL(url) { revoked.push(url); } }, Blob,
+    recordUpload(sources, target, via) { uploads.push({ sources, target, via }); },
   };
   vm.createContext(context);
   const source = fs.readFileSync(require.resolve('../baha-image-uploader.user.js'), 'utf8');
-  vm.runInContext(source.replace(/\}\)\(\);\s*$/, 'globalThis.testToast = showToast; })();'), context);
+  const capture = captureUploads ? 'enqueue = recordUpload; globalThis.testPaste = handlePaste;' : '';
+  vm.runInContext(source.replace(/\}\)\(\);\s*$/, `globalThis.testToast = showToast; ${capture} })();`), context);
   const click = (node, trusted) => node.handlers.click({ isTrusted: trusted, preventDefault() {} });
-  return { nodes, effects, context, click, menuLink: menu.children[0].children[0] };
+  return { nodes, effects, context, click, uploads, revoked, windowEvents, documentEvents, menuLink: menu.children[0].children[0] };
 }
 
 test('menu and toast refuse synthetic opening before reading history', () => {
@@ -91,4 +95,63 @@ test('history actions reject synthetic events and allow trusted actions', () => 
   h.click(clear, true);
   assert.equal(h.effects.writes, 2);
   assert.equal(h.effects.confirms, 2);
+});
+
+function paste(h, target = {}, frameTarget = null, text = '', files = [new Blob(['image'], { type: 'image/png' })]) {
+  const event = {
+    target, clipboardData: { files, getData: () => text }, prevented: false,
+    preventDefault() { this.prevented = true; }, stopImmediatePropagation() {},
+  };
+  h.context.testPaste(event, frameTarget);
+  return event;
+}
+
+test('global paste previews, appends, removes and requires trusted confirmation', () => {
+  const h = setup({ captureUploads: true });
+  const textarea = new h.context.HTMLTextAreaElement();
+  textarea.isConnected = true;
+  h.documentEvents.focusin({ target: textarea });
+  assert.equal(paste(h).prevented, true);
+  paste(h);
+  assert.equal(h.uploads.length, 0);
+  assert.equal(h.nodes.filter(n => n.tag === 'img').length, 2);
+  const upload = h.nodes.find(n => n.tag === '[data-action="upload"]');
+  h.click(upload, false);
+  assert.equal(h.uploads.length, 0);
+  h.click(h.nodes.find(n => n.textContent === '移除'), true);
+  h.click(upload, true);
+  assert.equal(h.uploads.length, 1);
+  assert.equal(h.uploads[0].sources.length, 1);
+  assert.equal(h.uploads[0].target.el, textarea);
+  assert.equal(h.revoked.length, 2);
+  h.click(upload, true);
+  assert.equal(h.uploads.length, 1);
+});
+
+test('cancel, Escape and removing all images release previews without uploading', () => {
+  for (const action of ['cancel', 'escape', 'remove']) {
+    const h = setup({ captureUploads: true });
+    paste(h);
+    if (action === 'cancel') h.click(h.nodes.find(n => n.tag === '[data-action="cancel"]'), true);
+    if (action === 'escape') h.windowEvents.keydown({ key: 'Escape' });
+    if (action === 'remove') h.click(h.nodes.find(n => n.textContent === '移除'), true);
+    h.click(h.nodes.find(n => n.tag === '[data-action="upload"]'), true);
+    assert.equal(h.uploads.length, 0);
+    assert.equal(h.revoked.length, 1);
+  }
+});
+
+test('direct textarea and iframe paste bypass preview; text and URLs remain untouched', () => {
+  const h = setup({ captureUploads: true });
+  const textarea = new h.context.HTMLTextAreaElement();
+  paste(h, textarea);
+  paste(h, {}, { kind: 'rte' });
+  assert.equal(h.uploads.length, 2);
+  assert.equal(h.nodes.filter(n => n.tag === 'img').length, 0);
+  assert.equal(paste(h, {}, null, 'ordinary text').prevented, false);
+  assert.equal(paste(h, {}, null, 'https://example.com/image.png', []).prevented, false);
+  textarea.readOnly = true;
+  paste(h, textarea);
+  assert.equal(h.uploads.length, 2);
+  assert.equal(h.nodes.filter(n => n.tag === 'img').length, 1);
 });

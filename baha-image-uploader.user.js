@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.7
+// @version      1.0.8
 // @author       udeyubi
-// @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張圖片與上傳紀錄，純網址保留原本貼上行為。
+// @description  在巴哈哈啦區貼上或拖曳圖片，上傳到巴哈圖床並插入編輯框；全域貼上先預覽確認，直接貼進編輯框或拖曳則立即上傳，支援多張圖片與上傳紀錄。
 // @match        https://forum.gamer.com.tw/*
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -402,6 +402,7 @@
   function openHistory(event) {
     // GM storage 的資料只有在真實使用者操作時才載入共用 DOM。
     if (event?.isTrusted !== true) return;
+    pendingPaste?.close();
     injectStyles();
     document.querySelector('.bimg-modal-backdrop')?.remove();
     const backdrop = document.createElement('div');
@@ -500,7 +501,7 @@
       });
       shown = Math.min(shown + HISTORY_PAGE_SIZE, list.length);
       moreButton.hidden = shown >= list.length;
-      if (!list.length) grid.innerHTML = '<p class="bimg-empty">還沒有上傳紀錄。在巴哈任何地方貼上或拖曳圖片就會自動上傳。</p>';
+      if (!list.length) grid.innerHTML = '<p class="bimg-empty">還沒有上傳紀錄。可貼上或拖曳圖片；貼在編輯框以外的位置會先預覽確認。</p>';
     };
 
     const close = () => backdrop.remove();
@@ -621,6 +622,88 @@
     document.head.appendChild(style);
   }
 
+  // ---------- 全域貼上：本機預覽，確認後才加入上傳佇列 ----------
+
+  let pendingPaste = null;
+
+  function previewPaste(sources, target) {
+    if (pendingPaste) {
+      pendingPaste.add(sources);
+      return;
+    }
+    injectStyles();
+    const backdrop = document.createElement('div');
+    backdrop.className = 'bimg-modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="bimg-modal" role="dialog" aria-modal="true" aria-labelledby="bimg-preview-title">
+        <div class="bimg-modal__header">
+          <h2 id="bimg-preview-title">確認上傳圖片</h2>
+          <span class="bimg-modal__count"></span>
+          <button type="button" data-action="cancel">取消</button>
+          <button type="button" data-action="upload">確認上傳</button>
+        </div>
+        <div class="bimg-modal__body">
+          <p data-preview-note></p>
+          <div class="bimg-grid"></div>
+        </div>
+      </div>`;
+    backdrop.querySelector('[data-preview-note]').textContent = `圖片尚未上傳。${describeTarget(target)}。可移除不想上傳的圖片。`;
+    const grid = backdrop.querySelector('.bimg-grid');
+    const uploadButton = backdrop.querySelector('[data-action="upload"]');
+    let items = [];
+    let closed = false;
+    const updateCount = () => {
+      backdrop.querySelector('.bimg-modal__count').textContent = `${items.length} 張`;
+      uploadButton.disabled = items.length === 0;
+    };
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      items.forEach(item => URL.revokeObjectURL(item.url));
+      items = [];
+      backdrop.remove();
+      pendingPaste = null;
+    };
+    const add = (incoming) => {
+      incoming.forEach(source => {
+        const item = { source, url: URL.createObjectURL(source.file) };
+        items.push(item);
+        const card = document.createElement('div');
+        card.className = 'bimg-card';
+        const img = document.createElement('img');
+        img.src = item.url;
+        img.alt = source.file.name || '待上傳圖片';
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '移除';
+        remove.addEventListener('click', (event) => {
+          if (event.isTrusted !== true || closed || !items.includes(item)) return;
+          items = items.filter(entry => entry !== item);
+          URL.revokeObjectURL(item.url);
+          card.remove();
+          updateCount();
+        });
+        card.append(img, remove);
+        grid.appendChild(card);
+      });
+      updateCount();
+    };
+    uploadButton.addEventListener('click', (event) => {
+      if (event.isTrusted !== true || closed || !items.length) return;
+      const selected = items.map(item => item.source);
+      close();
+      enqueue(selected, target, 'paste');
+    });
+    backdrop.querySelector('[data-action="cancel"]').addEventListener('click', close);
+    backdrop.addEventListener('click', (event) => {
+      if (event.target === backdrop) close();
+    });
+    pendingPaste = { add, close };
+    add(sources);
+    document.body.appendChild(backdrop);
+    backdrop.querySelector('[data-action="cancel"]').focus();
+  }
+
   // ---------- 事件 ----------
 
   function handlePaste(event, frameTarget) {
@@ -628,8 +711,10 @@
     if (!sources.length) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    const target = frameTarget || targetFromElement(event.target) || resolveTarget();
-    enqueue(sources, target, 'paste');
+    // 只用這次事件的來源決定是否直接上傳，不以最後使用的輸入框判斷。
+    const directTarget = frameTarget || targetFromElement(event.target);
+    if (directTarget) enqueue(sources, directTarget, 'paste');
+    else previewPaste(sources, resolveTarget());
   }
 
   function handleDragEnter(event) {
@@ -638,7 +723,8 @@
 
   function handleKeydown(event) {
     if (event.key === 'Escape') {
-      if (document.querySelector('.bimg-lightbox')) closeLightbox();
+      if (pendingPaste) pendingPaste.close();
+      else if (document.querySelector('.bimg-lightbox')) closeLightbox();
       else document.querySelector('.bimg-modal-backdrop')?.remove();
     }
   }
