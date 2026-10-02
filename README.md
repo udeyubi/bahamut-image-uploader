@@ -80,18 +80,6 @@
 - 網路圖片是由腳本先下載再上傳；網址已過期或對方網站拒絕下載時會顯示失敗原因。
 - 網站改版可能導致上傳 API 或編輯框失效。
 
-## 技術說明：巴哈的上傳 API
-
-腳本走的是巴哈內建上傳對話框的同一套流程，全部都要帶登入 Cookie：
-
-1. `GET https://api.gamer.com.tw/forum/v1/image_token.php?bsn={看板}` 取得上傳 token（回傳 `data.token`）。
-2. `POST https://picc.gamer.com.tw/ajax/truth_image_upload.php`，multipart 欄位 `token`、`dzfile`（圖片檔），回傳新的 `token`。
-3. `GET https://api.gamer.com.tw/forum/v1/image_upload.php?token={第 2 步的 token}&bsn={看板}`，回傳 `data.list`，即圖片網址（`truth.bahamut.com.tw/s01/年月/forum/{看板}/...`）。
-
-沒有看板編號的頁面改用小屋圖庫的 `ajax/common/truth_image_token.php` 與 `truth_image_realupload.php`。
-
-巴哈內建的貼上處理只看剪貼簿的第一個項目，而從網頁複製圖片時第一個項目是 HTML，所以只會貼上外部網址；本腳本會檢查剪貼簿裡所有項目。
-
 ## 更新紀錄
 
 ### 1.0.4（2026-10-03）
