@@ -1,21 +1,14 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.4
+// @version      1.0.5
 // @author       udeyubi
-// @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張、網路圖片與上傳紀錄。
+// @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張圖片與上傳紀錄，純網址保留原本貼上行為。
 // @match        https://forum.gamer.com.tw/*
-// @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_setClipboard
 // @grant        unsafeWindow
-// @connect      fbcdn.net
-// @connect      cdninstagram.com
-// @connect      twimg.com
-// @connect      i.imgur.com
-// @connect      pximg.net
-// @connect      *
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -98,7 +91,7 @@
     }
   }
 
-  // 回傳 [{ file }] 或 [{ url }]；沒有圖片時回傳空陣列，交給原本的貼上行為
+  // 只接受實際圖片檔；純網址或 HTML 交給原本的貼上行為
   function extractImageSources(dt) {
     if (!dt) return [];
     const plainText = safeGetData(dt, 'text/plain').trim();
@@ -115,46 +108,10 @@
     // 從 Excel / Word 複製時剪貼簿也會附一張預覽圖，有實際文字就當成文字貼上
     if (files.length && !hasRealText) return files.map((file) => ({ file }));
 
-    const urls = [];
-    const html = safeGetData(dt, 'text/html');
-    if (html) {
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const srcs = [...doc.images].map((img) => img.getAttribute('src') || '').filter((src) => /^(?:https?:|data:image\/)/i.test(src));
-      if (srcs.length && !doc.body.textContent.trim()) urls.push(...srcs);
-    }
-    if (!urls.length) {
-      const uriList = safeGetData(dt, 'text/uri-list').split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
-      const candidates = uriList.length ? uriList : /^\S+$/.test(plainText) ? [plainText] : [];
-      urls.push(...candidates.filter(isImageUrl));
-    }
-    return [...new Set(urls)].map((url) => ({ url }));
+    return [];
   }
 
-  // ---------- 下載、轉檔、上傳 ----------
-
-  function downloadImage(url) {
-    if (/^data:/i.test(url)) return fetch(url).then((res) => res.blob());
-    return new Promise((resolve, reject) => {
-      const headers = /(?:^|\.)pximg\.net$/i.test(new URL(url).hostname) ? { Referer: 'https://www.pixiv.net/' } : {};
-      GM_xmlhttpRequest({
-        method: 'GET',
-        url,
-        headers,
-        responseType: 'blob',
-        timeout: 30000,
-        onload: (res) => {
-          const type = ((res.responseHeaders || '').match(/^content-type:\s*([^;\r\n]+)/im) || [])[1] || '';
-          const blob = res.response;
-          if (res.status < 200 || res.status >= 300 || !blob) return reject(new Error(`無法下載圖片（HTTP ${res.status}）`));
-          if (blob.type.startsWith('image/')) return resolve(blob);
-          if (type.startsWith('image/')) return resolve(new Blob([blob], { type }));
-          reject(new Error('網址不是圖片'));
-        },
-        onerror: () => reject(new Error('無法下載圖片')),
-        ontimeout: () => reject(new Error('下載圖片逾時')),
-      });
-    });
-  }
+  // ---------- 轉檔、上傳 ----------
 
   async function prepareImage(blob) {
     const type = blob.type.toLowerCase();
@@ -313,13 +270,7 @@
       first = false;
       showProgress();
       try {
-        // 已經是巴哈圖床的圖片就直接插入，不重複上傳
-        if (job.url && /^https:\/\/truth\.bahamut\.com\.tw\//i.test(job.url)) {
-          if (!insertImage(job.target, job.url)) batch.copied.push(job.url);
-          batch.done++;
-          continue;
-        }
-        const source = job.file || await downloadImage(job.url);
+        const source = job.file;
         const { blob, width, height } = await prepareImage(source);
         const bsn = bsnForTarget(job.target);
         let url;
@@ -342,7 +293,7 @@
             bsn,
             page: location.href,
             via: job.via,
-            from: job.url && !/^data:/i.test(job.url) ? job.url : '',
+            from: '',
           });
         } catch {
           saved = false;
