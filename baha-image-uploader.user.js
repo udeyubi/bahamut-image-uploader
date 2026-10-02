@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.2
+// @version      1.0.3
 // @author       udeyubi
 // @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張、網路圖片與上傳紀錄。
 // @match        https://forum.gamer.com.tw/*
@@ -565,21 +565,23 @@
 
   const closeLightbox = () => document.querySelector('.bimg-lightbox')?.remove();
 
-  // 與「巴哈黑名單偵測」相同：加在文章頁右上角的「更多」選單裡
+  // 與「巴哈黑名單偵測」相同：加在文章頁的「更多」選單裡；
+  // 頁首導覽列與往下捲後出現的固定標題列各有一個，兩個都要加
   function installMenuItem() {
-    const list = document.querySelector('#BH-menu-path .BH-menu-forumA-right.dropList > dl');
-    if (!list || list.querySelector('[data-bimg-history]')) return;
-    const item = document.createElement('dd');
-    const link = document.createElement('a');
-    link.href = 'javascript:void(0)';
-    link.dataset.bimgHistory = '1';
-    link.textContent = ' 上傳紀錄';
-    link.addEventListener('click', (event) => {
-      event.preventDefault();
-      openHistory();
+    document.querySelectorAll('.BH-menu-forumA-right.dropList > dl').forEach((list) => {
+      if (list.querySelector('[data-bimg-history]')) return;
+      const item = document.createElement('dd');
+      const link = document.createElement('a');
+      link.href = 'javascript:void(0)';
+      link.dataset.bimgHistory = '1';
+      link.textContent = ' 上傳紀錄';
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        openHistory();
+      });
+      item.appendChild(link);
+      list.appendChild(item);
     });
-    item.appendChild(link);
-    list.appendChild(item);
   }
 
   // ---------- 樣式 ----------
