@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.6
+// @version      1.0.7
 // @author       udeyubi
 // @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張圖片與上傳紀錄，純網址保留原本貼上行為。
 // @match        https://forum.gamer.com.tw/*
@@ -399,7 +399,9 @@
 
   // ---------- 畫面：上傳紀錄 ----------
 
-  function openHistory() {
+  function openHistory(event) {
+    // GM storage 的資料只有在真實使用者操作時才載入共用 DOM。
+    if (event?.isTrusted !== true) return;
     injectStyles();
     document.querySelector('.bimg-modal-backdrop')?.remove();
     const backdrop = document.createElement('div');
@@ -437,7 +439,10 @@
         img.src = item.url;
         img.alt = '';
         img.title = '點擊放大預覽';
-        img.addEventListener('click', () => openLightbox(item.url));
+        img.addEventListener('click', (event) => {
+          if (event.isTrusted !== true) return;
+          openLightbox(item.url);
+        });
         const openLink = document.createElement('a');
         openLink.className = 'bimg-card__open';
         openLink.href = item.url;
@@ -460,7 +465,8 @@
           button.type = 'button';
           button.textContent = label;
           if (action === 'delete') button.className = 'bimg-btn--danger';
-          button.addEventListener('click', () => {
+          button.addEventListener('click', (event) => {
+            if (event.isTrusted !== true) return;
             if (action === 'insert') {
               const target = resolveTarget();
               if (insertImage(target, item.url)) backdrop.remove();
@@ -500,15 +506,20 @@
     const close = () => backdrop.remove();
     backdrop.querySelector('.bimg-modal__close').addEventListener('click', close);
     backdrop.addEventListener('click', (event) => event.target === backdrop && close());
-    moreButton.addEventListener('click', renderMore);
-    backdrop.querySelector('[data-action="export"]').addEventListener('click', () => {
+    moreButton.addEventListener('click', (event) => {
+      if (event.isTrusted !== true) return;
+      renderMore();
+    });
+    backdrop.querySelector('[data-action="export"]').addEventListener('click', (event) => {
+      if (event.isTrusted !== true) return;
       const link = document.createElement('a');
       link.href = URL.createObjectURL(new Blob([JSON.stringify(history.load(), null, 2)], { type: 'application/json' }));
       link.download = `baha-upload-history-${Date.now()}.json`;
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     });
-    backdrop.querySelector('[data-action="clear"]').addEventListener('click', () => {
+    backdrop.querySelector('[data-action="clear"]').addEventListener('click', (event) => {
+      if (event.isTrusted !== true) return;
       if (!confirm('確定要清除全部上傳紀錄？圖片本身不會被刪除。')) return;
       history.clear();
       list = [];
@@ -549,7 +560,7 @@
       link.textContent = ' 上傳紀錄';
       link.addEventListener('click', (event) => {
         event.preventDefault();
-        openHistory();
+        openHistory(event);
       });
       item.appendChild(link);
       list.appendChild(item);
