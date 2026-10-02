@@ -2,6 +2,11 @@
 
 用於巴哈姆特哈啦區（`forum.gamer.com.tw`）的 Tampermonkey userscript。在頁面任何地方貼上或拖曳圖片檔，就會自動上傳到巴哈圖床並插入編輯框。只有網址或文字時，保留原本的貼上行為。
 
+## 安裝
+
+1. 安裝 [Tampermonkey](https://www.tampermonkey.net/)。
+2. [點此安裝 userscript](https://raw.githubusercontent.com/udeyubi/bahamut-image-uploader/main/baha-image-uploader.user.js)。
+
 ## 功能
 
 - **全域貼上**：剪貼簿內含圖片檔時，不必先點進編輯框，按 Ctrl+V 即可上傳。
@@ -65,11 +70,6 @@
 點縮圖放大預覽，點圖片旁邊或按 Esc 回到上傳紀錄。
 
 ![燈箱預覽](assets/lightbox.png)
-
-## 安裝
-
-1. 安裝 [Tampermonkey](https://www.tampermonkey.net/)。
-2. [點此安裝 userscript](https://raw.githubusercontent.com/udeyubi/bahamut-image-uploader/main/baha-image-uploader.user.js)。
 
 ## 使用提醒
 
