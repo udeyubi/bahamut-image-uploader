@@ -1,0 +1,64 @@
+# 巴哈圖片快速上傳
+
+用於巴哈姆特哈啦區（`forum.gamer.com.tw`）的 Tampermonkey userscript。在頁面任何地方貼上或拖曳圖片，就會自動上傳到巴哈圖床並插入編輯框，不會再貼成一串外部網址變成死圖。
+
+## 功能
+
+- **全域貼上**：不必先點進編輯框，在頁面任何地方按 Ctrl+V 都會上傳。
+- **任何圖片都上傳**：電腦截圖、從 Threads／FB／X 等網頁「複製圖片」、或只複製了圖片網址，都會上傳成巴哈圖床的圖片，不會轉成文字。
+- **拖曳上傳**：把圖片拖進頁面時會出現「把圖片拉進來以上傳」的全畫面遮罩，放開即上傳。
+- **多張上傳**：一次貼上或拖曳多張會依序上傳，每張間隔 1.5 秒，避免短時間送出太多請求；單張失敗會自動重試一次。
+- **上傳紀錄**：每張上傳成功的圖片都會記錄下來，可以再次插入、複製網址或匯出。
+- 寬度超過 1920 的圖片會先縮圖（與巴哈內建上傳相同）；BMP、AVIF 等巴哈不收的格式會自動轉成 PNG。
+- 已經是巴哈圖床（`truth.bahamut.com.tw`）的圖片會直接插入，不會重複上傳。
+
+## 圖片會插到哪裡
+
+1. 最後點過的留言框或輸入框。
+2. 否則插到文章編輯框（文章底部的快速回覆、發文頁面）。
+3. 頁面上沒有任何編輯框時，上傳後會把網址複製到剪貼簿。
+
+文章編輯框插入 `<img>`（BBCode 模式則插入 `[img=網址]`）；留言框插入圖片網址。
+
+## 上傳紀錄
+
+- **開啟方式**：按 `Alt + U`，或點 Tampermonkey 選單裡的「上傳紀錄」，或點上傳完成提示上的「上傳紀錄」按鈕。
+- **儲存位置**：Tampermonkey 的腳本儲存空間（`GM_setValue`），所有巴哈分頁共用，清除網站 Cookie／快取也不會消失。最多保留最近 1000 筆。
+- **每筆紀錄的欄位**：圖片網址、上傳時間、檔案大小、寬高、看板編號、上傳時所在頁面、貼上或拖曳、來源網址（從網路圖片上傳時）。
+- 可以插入、複製網址、開啟、刪除單筆紀錄，或匯出全部紀錄成 JSON。刪除紀錄不會刪除巴哈圖床上的圖片。
+- 若想備份或換電腦，可以用「匯出 JSON」，或用 Tampermonkey 本身的備份／同步功能。
+
+## 安裝
+
+1. 安裝 [Tampermonkey](https://www.tampermonkey.net/)。
+2. [點此安裝 userscript](https://raw.githubusercontent.com/udeyubi/bahamut-image-uploader/main/baha-image-uploader.user.js)。
+3. 第一次上傳網路圖片時，Tampermonkey 會詢問是否允許連線到該圖片網站，選擇允許即可。
+
+## 使用提醒
+
+- 必須先登入巴哈姆特才能上傳。
+- 從 Excel、Word 複製含文字的內容時會照常貼上文字，不會被當成圖片。
+- 網路圖片是由腳本先下載再上傳；網址已過期或對方網站拒絕下載時會顯示失敗原因。
+- 網站改版可能導致上傳 API 或編輯框失效。
+
+## 技術說明：巴哈的上傳 API
+
+腳本走的是巴哈內建上傳對話框的同一套流程，全部都要帶登入 Cookie：
+
+1. `GET https://api.gamer.com.tw/forum/v1/image_token.php?bsn={看板}` 取得上傳 token（回傳 `data.token`）。
+2. `POST https://picc.gamer.com.tw/ajax/truth_image_upload.php`，multipart 欄位 `token`、`dzfile`（圖片檔），回傳新的 `token`。
+3. `GET https://api.gamer.com.tw/forum/v1/image_upload.php?token={第 2 步的 token}&bsn={看板}`，回傳 `data.list`，即圖片網址（`truth.bahamut.com.tw/s01/年月/forum/{看板}/...`）。
+
+沒有看板編號的頁面改用小屋圖庫的 `ajax/common/truth_image_token.php` 與 `truth_image_realupload.php`。
+
+巴哈內建的貼上處理只看剪貼簿的第一個項目，而從網頁複製圖片時第一個項目是 HTML，所以只會貼上外部網址；本腳本會檢查剪貼簿裡所有項目。
+
+## 更新紀錄
+
+### 1.0.0（2026-10-03）
+
+- 第一版：全域貼上上傳、拖曳遮罩、多張依序上傳與重試、網路圖片下載後上傳、上傳紀錄。
+
+## 作者
+
+[@udeyubi](https://github.com/udeyubi)
