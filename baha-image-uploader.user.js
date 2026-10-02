@@ -1,14 +1,13 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.0.1
 // @author       udeyubi
 // @description  在巴哈哈啦區任何地方貼上或拖曳圖片，自動上傳到巴哈圖床並插入編輯框；支援多張、網路圖片與上傳紀錄。
 // @match        https://forum.gamer.com.tw/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        GM_registerMenuCommand
 // @grant        GM_setClipboard
 // @grant        unsafeWindow
 // @connect      fbcdn.net
@@ -460,6 +459,8 @@
         img.loading = 'lazy';
         img.src = item.url;
         img.alt = '';
+        img.title = '點擊放大預覽';
+        img.addEventListener('click', () => openLightbox(item.url));
         const meta = document.createElement('div');
         meta.className = 'bimg-card__meta';
         const dims = item.width ? `${item.width}×${item.height}・` : '';
@@ -527,6 +528,38 @@
     renderMore();
   }
 
+  // 燈箱疊在上傳紀錄上方，點圖片以外的地方關閉燈箱、回到上傳紀錄
+  function openLightbox(url) {
+    closeLightbox();
+    const lightbox = document.createElement('div');
+    lightbox.className = 'bimg-lightbox';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = '';
+    lightbox.appendChild(img);
+    lightbox.addEventListener('click', (event) => event.target === lightbox && closeLightbox());
+    document.body.appendChild(lightbox);
+  }
+
+  const closeLightbox = () => document.querySelector('.bimg-lightbox')?.remove();
+
+  // 與「巴哈黑名單偵測」相同：加在文章頁右上角的「更多」選單裡
+  function installMenuItem() {
+    const list = document.querySelector('#BH-menu-path .BH-menu-forumA-right.dropList > dl');
+    if (!list || list.querySelector('[data-bimg-history]')) return;
+    const item = document.createElement('dd');
+    const link = document.createElement('a');
+    link.href = 'javascript:void(0)';
+    link.dataset.bimgHistory = '1';
+    link.textContent = ' 上傳紀錄';
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      openHistory();
+    });
+    item.appendChild(link);
+    list.appendChild(item);
+  }
+
   // ---------- 樣式 ----------
 
   function injectStyles() {
@@ -554,7 +587,9 @@
       .bimg-modal__body { overflow-y: auto; padding: 16px 18px; }
       .bimg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
       .bimg-card { display: grid; gap: 6px; min-width: 0; padding: 8px; border: 1px solid #ddd; border-radius: 8px; }
-      .bimg-card img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; border-radius: 4px; background: #f2f2f2; }
+      .bimg-card img { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; border-radius: 4px; background: #f2f2f2; cursor: zoom-in; }
+      .bimg-lightbox { position: fixed; inset: 0; z-index: 2147483003; display: grid; place-items: center; padding: 24px; background: rgba(0,0,0,.86); cursor: zoom-out; }
+      .bimg-lightbox img { max-width: 100%; max-height: calc(100vh - 48px); object-fit: contain; border-radius: 4px; box-shadow: 0 12px 40px rgba(0,0,0,.5); cursor: default; }
       .bimg-card__meta { overflow: hidden; color: #777; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
       .bimg-card__actions { display: flex; flex-wrap: wrap; gap: 4px; }
       .bimg-modal .bimg-card__actions button { padding: 2px 7px; font-size: 12px; }
@@ -592,7 +627,8 @@
       event.preventDefault();
       openHistory();
     } else if (event.key === 'Escape') {
-      document.querySelector('.bimg-modal-backdrop')?.remove();
+      if (document.querySelector('.bimg-lightbox')) closeLightbox();
+      else document.querySelector('.bimg-modal-backdrop')?.remove();
     }
   }
 
@@ -629,5 +665,6 @@
   hookEditorFrames();
   setInterval(hookEditorFrames, 1000);
 
-  GM_registerMenuCommand('上傳紀錄（Alt+U）', openHistory);
+  installMenuItem();
+  new MutationObserver(installMenuItem).observe(document.body, { childList: true, subtree: true });
 })();
