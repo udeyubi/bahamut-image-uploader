@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         巴哈圖片快速上傳
 // @namespace    http://tampermonkey.net/
-// @version      1.0.8
+// @version      1.0.9
 // @author       udeyubi
 // @description  在巴哈哈啦區貼上或拖曳圖片，上傳到巴哈圖床並插入編輯框；全域貼上先預覽確認，直接貼進編輯框或拖曳則立即上傳，支援多張圖片與上傳紀錄。
 // @match        https://forum.gamer.com.tw/*
@@ -51,12 +51,24 @@
 
   const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  // 圖片網址會存進紀錄、放進連結與 [img=] 語法，只接受巴哈網域的 https 網址，且不含會破壞語法的字元
+  const BAHA_HOSTS = /(?:^|\.)(?:bahamut\.com\.tw|gamer\.com\.tw)$/i;
+  function isSafeImageUrl(value) {
+    if (typeof value !== 'string' || !/^https:\/\/[^\s"'<>[\]\\]+$/.test(value)) return false;
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !url.username && !url.password && BAHA_HOSTS.test(url.hostname);
+    } catch {
+      return false;
+    }
+  }
+
   // ---------- 上傳紀錄（存在 Tampermonkey 的 GM storage，跨分頁共用，清除網站資料也不會消失） ----------
 
   const history = {
     load() {
       const list = GM_getValue(HISTORY_KEY, []);
-      return Array.isArray(list) ? list : [];
+      return Array.isArray(list) ? list.filter((item) => isSafeImageUrl(item?.url)) : [];
     },
     add(entry) {
       const list = history.load().filter((item) => item.url !== entry.url);
@@ -176,6 +188,7 @@
     const doneJson = await fetchJson(bsn ? API.forumDone(uploadJson.token, bsn) : API.commonDone(uploadJson.token));
     const list = doneJson.data?.list || (Array.isArray(doneJson) ? doneJson : null);
     if (!list?.[0]) throw new Error(apiError(doneJson) || '上傳失敗');
+    if (!isSafeImageUrl(list[0])) throw new Error('伺服器回傳的圖片網址不正確');
     return list[0];
   }
 
@@ -378,6 +391,8 @@
         event.preventDefault();
         event.stopPropagation();
         hideOverlay();
+        // 網頁程式模擬的拖放不處理，避免被拿來代為上傳、寫入紀錄或覆寫剪貼簿
+        if (event.isTrusted !== true) return;
         const sources = extractImageSources(event.dataTransfer);
         if (!sources.length) return showToast('沒有可以上傳的圖片', { error: true, duration: 4000 });
         enqueue(sources, resolveTarget(), 'drop');
@@ -707,6 +722,8 @@
   // ---------- 事件 ----------
 
   function handlePaste(event, frameTarget) {
+    // 網頁程式模擬的貼上不處理，避免被拿來代為上傳、寫入紀錄或覆寫剪貼簿
+    if (event?.isTrusted !== true) return;
     const sources = extractImageSources(event.clipboardData);
     if (!sources.length) return;
     event.preventDefault();
@@ -718,7 +735,7 @@
   }
 
   function handleDragEnter(event) {
-    if (isFileDrag(event.dataTransfer)) showOverlay();
+    if (event?.isTrusted === true && isFileDrag(event.dataTransfer)) showOverlay();
   }
 
   function handleKeydown(event) {

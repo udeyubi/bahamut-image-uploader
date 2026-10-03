@@ -5,7 +5,7 @@ const { test } = require('node:test');
 
 // Minimal DOM/GM harness: exercises script handlers without network or real storage.
 // isTrusted values model browser events; this is not a browser isolation test.
-function setup({ captureUploads = false } = {}) {
+function setup({ captureUploads = false, history = null, fetch = null } = {}) {
   const nodes = [];
   const uploads = [], revoked = [], windowEvents = {}, documentEvents = {};
   const effects = { reads: 0, writes: 0, copies: 0, confirms: 0, downloads: 0 };
@@ -26,7 +26,7 @@ function setup({ captureUploads = false } = {}) {
     nodes.push(el);
     return el;
   }
-  let entries = Array.from({ length: 61 }, (_, i) => ({
+  let entries = history || Array.from({ length: 61 }, (_, i) => ({
     url: `https://truth.bahamut.com.tw/test-${i}.png`, time: 1, size: 1,
   }));
   const menu = element('menu');
@@ -46,13 +46,15 @@ function setup({ captureUploads = false } = {}) {
     confirm() { effects.confirms++; return true; },
     MutationObserver: class { observe() {} },
     setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {},
-    URL: { createObjectURL() { return `blob:test-${nodes.length}`; }, revokeObjectURL(url) { revoked.push(url); } }, Blob,
+    URL: class extends URL { static createObjectURL() { return `blob:test-${nodes.length}`; } static revokeObjectURL(url) { revoked.push(url); } }, Blob,
     recordUpload(sources, target, via) { uploads.push({ sources, target, via }); },
+    fetch, AbortController, FormData, location: { search: '', href: 'https://forum.gamer.com.tw/' },
   };
   vm.createContext(context);
   const source = fs.readFileSync(require.resolve('../baha-image-uploader.user.js'), 'utf8');
   const capture = captureUploads ? 'enqueue = recordUpload; globalThis.testPaste = handlePaste;' : '';
-  vm.runInContext(source.replace(/\}\)\(\);\s*$/, `globalThis.testToast = showToast; ${capture} })();`), context);
+  const internals = 'globalThis.testUpload = uploadToBaha; globalThis.testSafeUrl = isSafeImageUrl;';
+  vm.runInContext(source.replace(/\}\)\(\);\s*$/, `globalThis.testToast = showToast; ${capture} ${internals} })();`), context);
   const click = (node, trusted) => node.handlers.click({ isTrusted: trusted, preventDefault() {} });
   return { nodes, effects, context, click, uploads, revoked, windowEvents, documentEvents, menuLink: menu.children[0].children[0] };
 }
@@ -97,9 +99,9 @@ test('history actions reject synthetic events and allow trusted actions', () => 
   assert.equal(h.effects.confirms, 2);
 });
 
-function paste(h, target = {}, frameTarget = null, text = '', files = [new Blob(['image'], { type: 'image/png' })]) {
+function paste(h, target = {}, frameTarget = null, text = '', files = [new Blob(['image'], { type: 'image/png' })], isTrusted = true) {
   const event = {
-    target, clipboardData: { files, getData: () => text }, prevented: false,
+    isTrusted, target, clipboardData: { files, getData: () => text }, prevented: false,
     preventDefault() { this.prevented = true; }, stopImmediatePropagation() {},
   };
   h.context.testPaste(event, frameTarget);
@@ -154,4 +156,53 @@ test('direct textarea and iframe paste bypass preview; text and URLs remain unto
   paste(h, textarea);
   assert.equal(h.uploads.length, 2);
   assert.equal(h.nodes.filter(n => n.tag === 'img').length, 1);
+});
+
+test('synthetic paste is ignored and left to the page', () => {
+  const h = setup({ captureUploads: true });
+  const textarea = new h.context.HTMLTextAreaElement();
+  for (const [target, frame] of [[{}, null], [textarea, null], [{}, { kind: 'rte' }]]) {
+    assert.equal(paste(h, target, frame, '', undefined, false).prevented, false);
+  }
+  assert.equal(h.uploads.length, 0);
+  assert.equal(h.nodes.filter(n => n.tag === 'img').length, 0);
+});
+
+test('only https Bahamut image URLs are accepted', () => {
+  const { context } = setup();
+  for (const url of [
+    'https://truth.bahamut.com.tw/s01/202610/abc.PNG',
+    'https://im.bahamut.com.tw/a.jpg',
+    'https://p2.bahamut.com.tw/B/2KU/a.webp',
+  ]) assert.equal(context.testSafeUrl(url), true, url);
+  for (const url of [
+    'javascript:alert(1)', 'http://truth.bahamut.com.tw/a.png', 'https://evil.com/a.png',
+    'https://truth.bahamut.com.tw.evil.com/a.png', 'https://evilbahamut.com.tw/a.png',
+    'https://truth.bahamut.com.tw/a.png]x[/img]', 'https://truth.bahamut.com.tw/a b.png',
+    'https://truth.bahamut.com.tw/a".png', 'https://u:p@truth.bahamut.com.tw/a.png',
+    'data:image/png;base64,AAAA', '', null, { toString: () => 'https://truth.bahamut.com.tw/a.png' },
+  ]) assert.equal(context.testSafeUrl(url), false, String(url));
+});
+
+test('history skips stored entries with unsafe URLs', () => {
+  const h = setup({ history: [
+    { url: 'https://truth.bahamut.com.tw/ok.png', time: 1, size: 1 },
+    { url: 'javascript:alert(1)', time: 1, size: 1 },
+    { url: 'https://evil.com/a.png', time: 1, size: 1 },
+    null, 'https://truth.bahamut.com.tw/not-an-object.png',
+  ] });
+  h.click(h.menuLink, true);
+  const imgs = h.nodes.filter(n => n.tag === 'img');
+  assert.equal(imgs.length, 1);
+  assert.equal(imgs[0].src, 'https://truth.bahamut.com.tw/ok.png');
+  assert.equal(h.nodes.find(n => n.tag === 'a' && n.className === 'bimg-card__open').href, 'https://truth.bahamut.com.tw/ok.png');
+});
+
+test('upload rejects a non-Bahamut URL returned by the server', async () => {
+  const replies = (url) => [{ token: 't1' }, { token: 't2' }, { data: { list: [url] } }];
+  const fakeFetch = (queue) => async () => ({ ok: true, json: async () => queue.shift() });
+  const bad = setup({ fetch: fakeFetch(replies('javascript:alert(1)')) });
+  await assert.rejects(bad.context.testUpload(new Blob(['x'], { type: 'image/png' }), '60076'), /網址不正確/);
+  const good = setup({ fetch: fakeFetch(replies('https://truth.bahamut.com.tw/s01/a.png')) });
+  assert.equal(await good.context.testUpload(new Blob(['x'], { type: 'image/png' }), '60076'), 'https://truth.bahamut.com.tw/s01/a.png');
 });
